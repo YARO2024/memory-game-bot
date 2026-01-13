@@ -2,15 +2,13 @@
   "name": "memory-game-bot",
   "version": "1.0.0",
   "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "commonjs",
-  "dependencies": {
-    "telegraf": "^4.16.3"
+  "scripts": {
+    "start": "node index.js"
   },
-  "description": ""
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "natural": "^8.1.0",
+    "telegraf": "^4.16.3"
+  }
 }
