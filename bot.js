@@ -59,7 +59,8 @@ bot.on('text', (ctx) => {
     const botWord = generateBotWord(game.chain);
     game.chain.push(normalize(botWord));
 
-    ctx.reply(botWord); // только слово бота
+    // Отправляем только слово бота
+    ctx.reply(addSurprise(botWord));
     return;
   }
 
@@ -90,7 +91,8 @@ bot.on('text', (ctx) => {
 
   game.record = Math.max(game.record, game.chain.length);
 
-  ctx.reply(botWord);
+  // Отправляем только слово бота + небольшой сюрприз
+  ctx.reply(addSurprise(botWord));
 });
 
 // генерация слова бота
@@ -104,6 +106,20 @@ function generateBotWord(usedWords) {
 
   const available = baseWords.filter(w => !usedWords.includes(normalize(w)));
   return available.length === 0 ? 'тишина' : available[Math.floor(Math.random() * available.length)];
+}
+
+// функция для сюрприза: иногда добавляет эмодзи или короткий комментарий
+function addSurprise(word) {
+  const surprises = [
+    '✨', '👍', '😎', '🎉', '💡', '🔥', '😺', '😋', '😉', '🌟'
+  ];
+
+  // 30% шанс добавить сюрприз
+  if (Math.random() < 0.3) {
+    const s = surprises[Math.floor(Math.random() * surprises.length)];
+    return `${word} ${s}`;
+  }
+  return word;
 }
 
 // запуск бота
