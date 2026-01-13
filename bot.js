@@ -34,14 +34,21 @@ function getRank(depth) {
 // 🚀 СТАРТ
 // =====================
 bot.start((ctx) => {
-  games[ctx.chat.id] = {
+  startGame(ctx.chat.id);
+  ctx.reply(getIntroText(), { parse_mode: 'Markdown' });
+});
+
+function startGame(chatId) {
+  games[chatId] = {
     chain: [],
     lives: 3,
     record: 0,
     awaitingReverse: false
   };
+}
 
-  ctx.reply(
+function getIntroText() {
+  return (
     '🧠 *Игра «Я беру с собой»*\n\n' +
     'Ты проверяешь не скорость, а *чистую память*.\n\n' +
     '📌 Как это работает:\n' +
@@ -52,18 +59,17 @@ bot.start((ctx) => {
     '❤️ 3 жизни (ошибся — теряешь)\n' +
     '🏷 Ранги за глубину цепочки\n' +
     '🌀 Бонус-испытание на память\n' +
-    '🧠 Можно писать с ошибками форм:\n' +
+    '🧠 Можно писать как угодно:\n' +
     '_регистр, запятые, падежи — неважно_\n\n' +
-    'Поехали. Напиши первое слово 👇',
-    { parse_mode: 'Markdown' }
+    'Поехали. Напиши первое слово 👇'
   );
-});
+}
 
 // =====================
 // 🔄 СБРОС
 // =====================
 bot.command('reset', (ctx) => {
-  delete games[ctx.chat.id];
+  startGame(ctx.chat.id);
   ctx.reply('🔄 Игра сброшена. Напиши новое слово.');
 });
 
@@ -74,9 +80,9 @@ bot.on('text', (ctx) => {
   const chatId = ctx.chat.id;
   const text = ctx.message.text;
 
+  // 🔥 АВТОСТАРТ, ЕСЛИ ИГРЫ НЕТ
   if (!games[chatId]) {
-    ctx.reply('Напиши /start чтобы начать игру');
-    return;
+    startGame(chatId);
   }
 
   const game = games[chatId];
@@ -85,45 +91,31 @@ bot.on('text', (ctx) => {
   if (game.awaitingReverse) {
     const userWords = text.split(/[\s,]+/).map(normalize).filter(Boolean);
     const expected = [...game.chain].reverse();
-
     game.awaitingReverse = false;
 
     if (JSON.stringify(userWords) === JSON.stringify(expected)) {
-      game.lives += 1;
-      ctx.reply(
-        '🏆 *ИДЕАЛЬНАЯ ПАМЯТЬ*\n' +
-        'Ты прошёл бонусное испытание.\n\n' +
-        '❤️ +1 жизнь',
-        { parse_mode: 'Markdown' }
-      );
+      game.lives++;
+      ctx.reply('🏆 ИДЕАЛЬНАЯ ПАМЯТЬ!\n❤️ +1 жизнь');
     } else {
-      ctx.reply(
-        '❌ Не вышло — но это был бонус.\n' +
-        'Основная игра продолжается 😎'
-      );
+      ctx.reply('❌ Не получилось, но это был бонус 😉');
     }
     return;
   }
 
-  const wordsRaw = text.split(/[\s,]+/).filter(Boolean);
-  const words = wordsRaw.map(normalize);
+  const words = text.split(/[\s,]+/).map(normalize).filter(Boolean);
 
   // ===== ПЕРВЫЙ ХОД =====
   if (game.chain.length === 0) {
     game.chain.push(words[0]);
-
     const botWord = generateBotWord(game.chain);
     game.chain.push(normalize(botWord));
-
     ctx.reply(botWord);
     return;
   }
 
-  // ❗ СТРОГАЯ ПРОВЕРКА ДЛИНЫ
+  // ===== СТРОГАЯ ПРОВЕРКА ДЛИНЫ =====
   if (words.length !== game.chain.length + 1) {
-    ctx.reply(
-      `❌ Нужно повторить ${game.chain.length} слов и добавить ОДНО новое`
-    );
+    ctx.reply(`❌ Нужно повторить ${game.chain.length} слов и добавить ОДНО новое`);
     return;
   }
 
@@ -131,83 +123,52 @@ bot.on('text', (ctx) => {
   for (let i = 0; i < game.chain.length; i++) {
     if (words[i] !== game.chain[i]) {
       game.lives--;
-
       if (game.lives <= 0) {
         ctx.reply(
-          '💀 *Игра окончена*\n\n' +
-          `📏 Глубина: ${game.chain.length}\n` +
-          `🏷 Ранг: ${getRank(game.chain.length)}\n` +
-          `🏆 Рекорд: ${game.record}\n\n` +
-          'Напиши /start чтобы начать заново',
-          { parse_mode: 'Markdown' }
+          `💀 Игра окончена\n🏷 Ранг: ${getRank(game.chain.length)}\nНапиши /start`
         );
         delete games[chatId];
         return;
       }
-
-      ctx.reply(
-        `❌ Ошибка\n❤️ Осталось жизней: ${game.lives}\n` +
-        `🏷 Ранг: ${getRank(game.chain.length)}`
-      );
+      ctx.reply(`❌ Ошибка\n❤️ Осталось жизней: ${game.lives}`);
       return;
     }
   }
 
-  // ===== НОВОЕ СЛОВО =====
   const newWord = words[words.length - 1];
   if (game.chain.includes(newWord)) {
-    ctx.reply('❌ Это слово уже было. Нужно новое 👀');
+    ctx.reply('❌ Это слово уже было');
     return;
   }
 
   game.chain.push(newWord);
-
-  // ===== ХОД БОТА =====
   const botWord = generateBotWord(game.chain);
   game.chain.push(normalize(botWord));
 
-  game.record = Math.max(game.record, game.chain.length);
-
   ctx.reply(
-    `${botWord}\n\n` +
-    `📏 Глубина: ${game.chain.length}\n` +
-    `🏷 Ранг: ${getRank(game.chain.length)}`
+    `${botWord}\n📏 Глубина: ${game.chain.length}\n🏷 Ранг: ${getRank(game.chain.length)}`
   );
 
-  // ===== ПРЕДЛОЖЕНИЕ БОНУСА =====
   if (game.chain.length === 10) {
     game.awaitingReverse = true;
     ctx.reply(
-      '🌀 *БОНУС-ИСПЫТАНИЕ*\n' +
-      'Хочешь попробовать повторить цепочку В ОБРАТНОМ ПОРЯДКЕ?\n\n' +
-      'Если получится — будет награда 👀',
-      {
-        parse_mode: 'Markdown',
-        ...Markup.keyboard(['Да', 'Нет']).oneTime().resize()
-      }
+      '🌀 Хочешь бонус?\nПовтори цепочку В ОБРАТНОМ ПОРЯДКЕ',
+      Markup.keyboard(['Да', 'Нет']).oneTime().resize()
     );
   }
 });
 
 // =====================
-// 🧳 СЛОВА БОТА
-// =====================
 function generateBotWord(used) {
   const baseWords = [
     'хлеб','вода','нож','рюкзак','фонарь',
     'аптечка','карта','спички','еда',
-    'ботинки','соль','куртка','котелок'
+    'ботинки','соль','куртка'
   ];
-
-  const available = baseWords.filter(
-    w => !used.includes(normalize(w))
-  );
-
+  const available = baseWords.filter(w => !used.includes(normalize(w)));
   return available.length
     ? available[Math.floor(Math.random() * available.length)]
     : 'тишина';
 }
 
-// =====================
-bot.launch()
-  .then(() => console.log('Бот запущен'));
+bot.launch().then(() => console.log('Бот запущен'));
