@@ -1,131 +1,190 @@
-const { Telegraf } = require('telegraf');
-const natural = require('natural'); // стеммер для русского
+const { Telegraf, Markup } = require('telegraf');
+const natural = require('natural');
 const stemmer = natural.PorterStemmerRu;
 
-// 🔑 Проверка токена
+// ===== ПРОВЕРКА ТОКЕНА =====
 if (!process.env.BOT_TOKEN) {
   console.error('❌ BOT_TOKEN is missing');
   process.exit(1);
 }
 
-console.log("BOT_TOKEN:", process.env.BOT_TOKEN);
-
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// =====================
-// 🧠 ИГРА "Я БЕРУ С СОБОЮ"
+// ===== СОСТОЯНИЕ ИГР =====
 const games = {};
 
-// нормализация слова: lowercase + стемминг + удаление знаков
-function normalize(word) {
-  return stemmer.stem(word.toLowerCase().replace(/[.,!?]/g, '').trim());
+// ===== РАНГИ =====
+function getRank(depth) {
+  if (depth >= 17) return '👑 Абсолют';
+  if (depth >= 12) return '🔴 Легенда';
+  if (depth >= 8)  return '🟣 Выживальщик';
+  if (depth >= 5)  return '🔵 Путешественник';
+  return '🟢 Новичок';
 }
 
-// старт игры
+// ===== НОРМАЛИЗАЦИЯ =====
+function normalize(word) {
+  return stemmer.stem(
+    word.toLowerCase().replace(/[.,!?]/g, '').trim()
+  );
+}
+
+// ===== СТАРТ =====
 bot.start((ctx) => {
   const chatId = ctx.chat.id;
-  games[chatId] = { chain: [], record: 0 };
+
+  games[chatId] = {
+    chain: [],
+    lives: 3,
+    record: 0,
+    awaitingReverse: false
+  };
 
   ctx.reply(
-    '🧠 Игра началась!\nНапиши ЛЮБОЕ слово.\n' +
-    'Я добавлю своё.\nТы должен повторить всю цепочку и добавить новое.\n❗ Повторы запрещены.'
+    '🧠 Игра началась!\n\n' +
+    'Я беру с собой...\n\n' +
+    'Ты пишешь слово — я добавляю своё.\n' +
+    'Повтори всю цепочку и добавь новое.\n\n' +
+    '❤️ Жизней: 3\n' +
+    '❗ Повторы запрещены'
   );
 });
 
-// сброс игры
+// ===== СБРОС =====
 bot.command('reset', (ctx) => {
-  const chatId = ctx.chat.id;
-  delete games[chatId];
+  delete games[ctx.chat.id];
   ctx.reply('🔄 Игра сброшена. Напиши новое слово.');
 });
 
-// обработка текста
+// ===== ОСНОВНАЯ ЛОГИКА =====
 bot.on('text', (ctx) => {
   const chatId = ctx.chat.id;
   const text = ctx.message.text;
 
-  if (!games[chatId]) games[chatId] = { chain: [], record: 0 };
+  if (!games[chatId]) {
+    ctx.reply('Напиши /start чтобы начать игру');
+    return;
+  }
+
   const game = games[chatId];
 
-  // разбиваем ввод через пробел или запятую
-  const userWordsRaw = text.split(/[\s,]+/).filter(Boolean);
-  const userWordsNorm = userWordsRaw.map(normalize);
+  // ===== БОНУС: ОБРАТНЫЙ ПОРЯДОК =====
+  if (game.awaitingReverse) {
+    const userWords = text.split(/[\s,]+/).map(normalize).filter(Boolean);
+    const expected = [...game.chain].reverse();
 
-  // первый ход
+    game.awaitingReverse = false;
+
+    if (JSON.stringify(userWords) === JSON.stringify(expected)) {
+      game.lives += 1;
+      ctx.reply(
+        '🏆 ИДЕАЛЬНАЯ ПАМЯТЬ!\n' +
+        'Ты повторил цепочку в обратном порядке.\n\n' +
+        '❤️ +1 жизнь'
+      );
+    } else {
+      ctx.reply(
+        '❌ Не получилось, но это был бонус.\n' +
+        'Ты всё равно красавчик 😎'
+      );
+    }
+    return;
+  }
+
+  const userWordsRaw = text.split(/[\s,]+/).filter(Boolean);
+  const userWords = userWordsRaw.map(normalize);
+
+  // ===== ПЕРВЫЙ ХОД =====
   if (game.chain.length === 0) {
-    const firstWordNorm = userWordsNorm[0];
-    game.chain.push(firstWordNorm);
+    const first = userWords[0];
+    game.chain.push(first);
 
     const botWord = generateBotWord(game.chain);
     game.chain.push(normalize(botWord));
 
-    // Отправляем только слово бота
-    ctx.reply(addSurprise(botWord));
+    ctx.reply(botWord);
     return;
   }
 
-  // проверка цепочки по нормализованным словам
+  // ===== ПРОВЕРКА ЦЕПОЧКИ =====
   for (let i = 0; i < game.chain.length; i++) {
-    if (userWordsNorm[i] !== game.chain[i]) {
+    if (userWords[i] !== game.chain[i]) {
+      game.lives -= 1;
+
+      if (game.lives <= 0) {
+        ctx.reply(
+          '💀 ИГРА ОКОНЧЕНА\n\n' +
+          `Глубина: ${game.chain.length}\n` +
+          `Ранг: ${getRank(game.chain.length)}\n` +
+          `Рекорд: ${game.record}\n\n` +
+          'Напиши /start чтобы начать заново'
+        );
+        delete games[chatId];
+        return;
+      }
+
       ctx.reply(
-        `❌ Неверно.\nТекущая глубина: ${game.chain.length}\nРекорд: ${game.record}\n\nПопробуй ещё или /reset`
+        `❌ Ошибка\n` +
+        `❤️ Осталось жизней: ${game.lives}\n` +
+        `Ранг: ${getRank(game.chain.length)}`
       );
       return;
     }
   }
 
-  // проверка повторов
-  const newWordRaw = userWordsRaw[userWordsRaw.length - 1];
-  const newWordNorm = normalize(newWordRaw);
-
-  if (game.chain.includes(newWordNorm)) {
-    ctx.reply('❌ Повторы запрещены. Попробуй другое слово.');
+  // ===== ПРОВЕРКА ПОВТОРА =====
+  const newWord = userWords[userWords.length - 1];
+  if (game.chain.includes(newWord)) {
+    ctx.reply('❌ Повторы запрещены. Другое слово 👀');
     return;
   }
 
-  game.chain.push(newWordNorm);
+  game.chain.push(newWord);
 
-  // бот добавляет слово
+  // ===== ХОД БОТА =====
   const botWord = generateBotWord(game.chain);
   game.chain.push(normalize(botWord));
 
   game.record = Math.max(game.record, game.chain.length);
 
-  // Отправляем только слово бота + небольшой сюрприз
-  ctx.reply(addSurprise(botWord));
+  ctx.reply(
+    `${botWord}\n\n` +
+    `📏 Глубина: ${game.chain.length}\n` +
+    `🏷 Ранг: ${getRank(game.chain.length)}`
+  );
+
+  // ===== ПРЕДЛОЖЕНИЕ БОНУСА =====
+  if (game.chain.length === 10) {
+    game.awaitingReverse = true;
+    ctx.reply(
+      '🌀 БОНУС-ИСПЫТАНИЕ\n' +
+      'Хочешь попробовать повторить цепочку В ОБРАТНОМ ПОРЯДКЕ?',
+      Markup.keyboard(['Да', 'Нет']).oneTime().resize()
+    );
+  }
 });
 
-// генерация слова бота
-function generateBotWord(usedWords) {
+// ===== СЛОВА БОТА =====
+function generateBotWord(used) {
   const baseWords = [
-    'хлеб','чай','компас','верёвка','фонарь',
-    'палатка','рюкзак','спички','карта','нож',
-    'вода','котелок','куртка','ботинки','еда',
-    'ложка','кружка','соль','сахар','аптечка'
+    'хлеб','вода','нож','рюкзак','фонарь',
+    'палатка','аптечка','карта','спички',
+    'котелок','еда','куртка','ботинки'
   ];
 
-  const available = baseWords.filter(w => !usedWords.includes(normalize(w)));
-  return available.length === 0 ? 'тишина' : available[Math.floor(Math.random() * available.length)];
+  const available = baseWords.filter(
+    w => !used.includes(normalize(w))
+  );
+
+  return available.length
+    ? available[Math.floor(Math.random() * available.length)]
+    : 'тишина';
 }
 
-// функция для сюрприза: иногда добавляет эмодзи или короткий комментарий
-function addSurprise(word) {
-  const surprises = [
-    '✨', '👍', '😎', '🎉', '💡', '🔥', '😺', '😋', '😉', '🌟'
-  ];
-
-  // 30% шанс добавить сюрприз
-  if (Math.random() < 0.3) {
-    const s = surprises[Math.floor(Math.random() * surprises.length)];
-    return `${word} ${s}`;
-  }
-  return word;
-}
-
-// запуск бота
+// ===== ЗАПУСК =====
 bot.launch()
   .then(() => console.log('Бот запущен'))
-  .catch(err => console.error('Ошибка запуска бота:', err));
+  .catch(console.error);
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => bot.stop());
+process.once('SIGTERM', () => bot.stop());
