@@ -76,9 +76,9 @@ bot.command('reset', (ctx) => {
 // =====================
 // 🎮 ОСНОВНАЯ ЛОГИКА
 // =====================
-bot.on('text', (ctx) => {
+bot.on('text', async (ctx) => {
   const chatId = ctx.chat.id;
-  const text = ctx.message.text;
+  const messageId = ctx.message.message_id;
 
   // 🔥 АВТОСТАРТ, ЕСЛИ ИГРЫ НЕТ
   if (!games[chatId]) {
@@ -87,9 +87,17 @@ bot.on('text', (ctx) => {
 
   const game = games[chatId];
 
+  // ===== Сразу удаляем сообщение игрока =====
+  try {
+    await ctx.deleteMessage(messageId);
+  } catch (err) {
+    // игнорируем ошибки (например, если бот не может удалить старые сообщения)
+    console.warn('Не удалось удалить сообщение', err.message);
+  }
+
   // ===== БОНУС: ОБРАТНЫЙ ПОРЯДОК =====
   if (game.awaitingReverse) {
-    const userWords = text.split(/[\s,]+/).map(normalize).filter(Boolean);
+    const userWords = ctx.message.text?.split(/[\s,]+/).map(normalize).filter(Boolean) || [];
     const expected = [...game.chain].reverse();
     game.awaitingReverse = false;
 
@@ -102,7 +110,8 @@ bot.on('text', (ctx) => {
     return;
   }
 
-  const words = text.split(/[\s,]+/).map(normalize).filter(Boolean);
+  const wordsRaw = ctx.message.text?.split(/[\s,]+/).filter(Boolean) || [];
+  const words = wordsRaw.map(normalize);
 
   // ===== ПЕРВЫЙ ХОД =====
   if (game.chain.length === 0) {
