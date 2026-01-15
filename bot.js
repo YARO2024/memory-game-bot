@@ -34,43 +34,43 @@ function getRank(depth) {
 // 🚀 СТАРТ
 // =====================
 bot.start((ctx) => {
-  startGame(ctx.chat.id);
-  ctx.reply(getIntroText(), { parse_mode: 'Markdown' });
+  ctx.reply(
+    '🧠 *Игра «Я беру с собой»*\n\nВыберите режим:\n\n' +
+    '1️⃣ Запоминание слов\n2️⃣ Запоминание цифр (1–3 знака)',
+    { parse_mode: 'Markdown', ...Markup.keyboard(['Слова','Цифры']).oneTime().resize() }
+  );
 });
 
-function startGame(chatId) {
+bot.hears(['Слова','Цифры'], (ctx) => {
+  const mode = ctx.message.text.toLowerCase();
+  startGame(ctx.chat.id, mode);
+  ctx.reply(
+    `Выбран режим: *${mode}*\n\n` +
+    '📌 Начнем игру. Напиши первое слово/число 👇',
+    { parse_mode: 'Markdown', ...Markup.removeKeyboard() }
+  );
+});
+
+function startGame(chatId, mode='слова') {
   games[chatId] = {
     chain: [],
     lives: 3,
     record: 0,
-    awaitingReverse: false
+    awaitingReverse: false,
+    mode: mode
   };
-}
-
-function getIntroText() {
-  return (
-    '🧠 *Игра «Я беру с собой»*\n\n' +
-    'Ты проверяешь не скорость, а *чистую память*.\n\n' +
-    '📌 Как это работает:\n' +
-    '— ты повторяешь ВСЮ цепочку бота\n' +
-    '— добавляешь ОДНО новое слово\n' +
-    '— бот отвечает только своим словом\n\n' +
-    '🔥 Фишки игры:\n' +
-    '❤️ 3 жизни (ошибся — теряешь)\n' +
-    '🏷 Ранги за глубину цепочки\n' +
-    '🌀 Бонус-испытание на память\n' +
-    '🧠 Можно писать как угодно:\n' +
-    '_регистр, запятые, падежи — неважно_\n\n' +
-    'Поехали. Напиши первое слово 👇'
-  );
 }
 
 // =====================
 // 🔄 СБРОС
 // =====================
 bot.command('reset', (ctx) => {
-  startGame(ctx.chat.id);
-  ctx.reply('🔄 Игра сброшена. Напиши новое слово.');
+  if (!games[ctx.chat.id]) {
+    ctx.reply('Напиши /start чтобы начать игру');
+    return;
+  }
+  startGame(ctx.chat.id, games[ctx.chat.id].mode);
+  ctx.reply('🔄 Игра сброшена. Напиши новое слово/число.');
 });
 
 // =====================
@@ -80,20 +80,15 @@ bot.on('text', async (ctx) => {
   const chatId = ctx.chat.id;
   const messageId = ctx.message.message_id;
 
-  // 🔥 АВТОСТАРТ, ЕСЛИ ИГРЫ НЕТ
   if (!games[chatId]) {
-    startGame(chatId);
+    ctx.reply('Напиши /start чтобы начать игру');
+    return;
   }
 
   const game = games[chatId];
 
-  // ===== Сразу удаляем сообщение игрока =====
-  try {
-    await ctx.deleteMessage(messageId);
-  } catch (err) {
-    // игнорируем ошибки (например, если бот не может удалить старые сообщения)
-    console.warn('Не удалось удалить сообщение', err.message);
-  }
+  // ===== УДАЛЯЕМ СООБЩЕНИЕ ИГРОКА =====
+  try { await ctx.deleteMessage(messageId); } catch (e) {}
 
   // ===== БОНУС: ОБРАТНЫЙ ПОРЯДОК =====
   if (game.awaitingReverse) {
@@ -115,17 +110,16 @@ bot.on('text', async (ctx) => {
 
   // ===== ПЕРВЫЙ ХОД =====
   if (game.chain.length === 0) {
-    game.chain.push(words[0]);
-    const botWord = generateBotWord(game.chain);
-    game.chain.push(normalize(botWord));
-    ctx.reply(botWord);
+    const first = words[0];
+    game.chain.push(first);
+    const botWord = generateBotWord(game);
+    game.chain.push(botWord);
     return;
   }
 
-  // ===== СТРОГАЯ ПРОВЕРКА ДЛИНЫ =====
+  // ===== ПРОВЕРКА ДЛИНЫ =====
   if (words.length !== game.chain.length + 1) {
-    ctx.reply(`❌ Нужно повторить ${game.chain.length} слов и добавить ОДНО новое`);
-    return;
+    return; // ничего не показываем — игрок видит пустое поле
   }
 
   // ===== ПРОВЕРКА ЦЕПОЧКИ =====
@@ -133,51 +127,45 @@ bot.on('text', async (ctx) => {
     if (words[i] !== game.chain[i]) {
       game.lives--;
       if (game.lives <= 0) {
-        ctx.reply(
-          `💀 Игра окончена\n🏷 Ранг: ${getRank(game.chain.length)}\nНапиши /start`
-        );
         delete games[chatId];
-        return;
       }
-      ctx.reply(`❌ Ошибка\n❤️ Осталось жизней: ${game.lives}`);
-      return;
+      return; // ничего не показываем
     }
   }
 
-  const newWord = words[words.length - 1];
-  if (game.chain.includes(newWord)) {
-    ctx.reply('❌ Это слово уже было');
-    return;
-  }
+  const newWord = words[words.length-1];
+  if (game.chain.includes(newWord)) return;
 
   game.chain.push(newWord);
-  const botWord = generateBotWord(game.chain);
-  game.chain.push(normalize(botWord));
-
-  ctx.reply(
-    `${botWord}\n📏 Глубина: ${game.chain.length}\n🏷 Ранг: ${getRank(game.chain.length)}`
-  );
-
-  if (game.chain.length === 10) {
-    game.awaitingReverse = true;
-    ctx.reply(
-      '🌀 Хочешь бонус?\nПовтори цепочку В ОБРАТНОМ ПОРЯДКЕ',
-      Markup.keyboard(['Да', 'Нет']).oneTime().resize()
-    );
-  }
+  const botWord = generateBotWord(game);
+  game.chain.push(botWord);
+  game.record = Math.max(game.record, game.chain.length);
 });
 
 // =====================
-function generateBotWord(used) {
-  const baseWords = [
-    'хлеб','вода','нож','рюкзак','фонарь',
-    'аптечка','карта','спички','еда',
-    'ботинки','соль','куртка'
-  ];
-  const available = baseWords.filter(w => !used.includes(normalize(w)));
-  return available.length
-    ? available[Math.floor(Math.random() * available.length)]
-    : 'тишина';
+// 🧳 ГЕНЕРАЦИЯ СЛОВ / ЧИСЕЛ
+// =====================
+function generateBotWord(game) {
+  if (game.mode === 'цифры') {
+    // одно-, двух-, трёхзначные числа
+    let n;
+    if (game.chain.length < 5) n = 1;
+    else if (game.chain.length < 10) n = 2;
+    else n = 3;
+    const num = Math.floor(Math.random() * Math.pow(10,n));
+    return String(num);
+  } else {
+    // слова
+    const baseWords = [
+      'хлеб','вода','нож','рюкзак','фонарь',
+      'аптечка','карта','спички','еда',
+      'ботинки','соль','куртка'
+    ];
+    const available = baseWords.filter(w => !game.chain.includes(normalize(w)));
+    return available.length
+      ? available[Math.floor(Math.random() * available.length)]
+      : 'тишина';
+  }
 }
 
 bot.launch().then(() => console.log('Бот запущен'));
