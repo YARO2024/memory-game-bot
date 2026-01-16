@@ -2,66 +2,106 @@ const { Telegraf, Markup } = require('telegraf');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
+// =====================
+// ХРАНИЛИЩА
+// =====================
 const games = {};
 const duels = {};
 const stats = {};
 
+// =====================
+// УТИЛИТЫ
+// =====================
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const normalize = t => t.toLowerCase().replace(/[.,!?]/g, '').trim();
+const normWord = w =>
+  w.toLowerCase().replace(/[.,!?]/g, '').trim();
 
-// ================= START =================
+const genNumber = type => {
+  if (type === 1) return String(Math.floor(Math.random() * 10));
+  if (type === 2) return String(10 + Math.floor(Math.random() * 90));
+  return String(100 + Math.floor(Math.random() * 900));
+};
+
+const ranks = [
+  { d: 5, name: '🟢 Новичок' },
+  { d: 10, name: '🔵 Уверенный' },
+  { d: 20, name: '🟣 Мастер памяти' },
+  { d: 30, name: '🔴 Легенда' }
+];
+
+const getRank = d =>
+  [...ranks].reverse().find(r => d >= r.d)?.name || '⚪ Начинающий';
+
+// =====================
+// START
+// =====================
 bot.start(ctx => {
+  delete games[ctx.chat.id];
+
   ctx.reply(
-    '🧠 *Тренировка памяти*\n\nВыбери режим:',
-    {
-      parse_mode: 'Markdown',
-      ...Markup.keyboard(['📝 Слова', '🔢 Цифры', '⚔️ Дуэль']).resize()
-    }
+    '🧠 Игра «Я беру с собой»\n\n' +
+    'Выбери режим:\n' +
+    '📝 Слова\n' +
+    '🔢 Цифры\n\n' +
+    '⚔️ Дуэль: /duel',
+    Markup.keyboard(['📝 Слова', '🔢 Цифры']).resize()
   );
 });
 
-// ================= MODES =================
-bot.hears('📝 Слова', ctx => initGame(ctx, 'words'));
+// =====================
+// SOLO MODES
+// =====================
+bot.hears('📝 Слова', ctx => initSolo(ctx, 'words'));
 
 bot.hears('🔢 Цифры', ctx => {
   ctx.reply(
-    'Выбери сложность чисел:',
-    Markup.keyboard(['1️⃣ Одна цифра', '2️⃣ Две цифры', '3️⃣ Три цифры']).resize()
+    'Выбери сложность:',
+    Markup.keyboard(['1️⃣ 1 знак', '2️⃣ 2 знака', '3️⃣ 3 знака']).resize()
   );
 });
 
-bot.hears(['1️⃣ Одна цифра', '2️⃣ Две цифры', '3️⃣ Три цифры'], ctx => {
-  const map = {
-    '1️⃣ Одна цифра': 'normal',
-    '2️⃣ Две цифры': 'double',
-    '3️⃣ Три цифры': 'triple'
-  };
-  initGame(ctx, 'numbers', map[ctx.message.text]);
+bot.hears(['1️⃣ 1 знак', '2️⃣ 2 знака', '3️⃣ 3 знака'], ctx => {
+  const map = { '1️⃣ 1 знак': 1, '2️⃣ 2 знака': 2, '3️⃣ 3 знака': 3 };
+  initSolo(ctx, 'numbers', map[ctx.message.text]);
 });
 
-// ================= INIT GAME =================
-function initGame(ctx, mode, numberType = null) {
-  const id = ctx.chat.id;
-  games[id] = {
+function initSolo(ctx, mode, numType = null) {
+  games[ctx.chat.id] = {
     mode,
-    numberType,
+    numType,
     chain: [],
-    botUsed: new Set(),
-    lastBotMsg: null
+    used: new Set(),
+    lives: 3,
+    lastBotMsg: null,
+    bonusUnlocked: false
   };
-  stats[id] ??= { best: 0, games: 0 };
-  ctx.reply('Игра началась. Напиши первое значение 👇', Markup.removeKeyboard());
+
+  ctx.reply(
+    '🔥 Игра началась!\n' +
+    '— Повтори цепочку\n' +
+    '— Добавь ОДНО своё\n' +
+    '— Сообщения стираются\n\n' +
+    'Напиши первое 👇',
+    Markup.removeKeyboard()
+  );
 }
 
-// ================= DUEL =================
-bot.hears('⚔️ Дуэль', ctx => {
+// =====================
+// DUEL
+// =====================
+bot.command('duel', ctx => {
+  delete games[ctx.chat.id];
+
   const code = Math.random().toString(36).slice(2, 7);
   duels[code] = {
     players: [ctx.chat.id],
-    turnIndex: 0,
     chain: [],
-    active: true
+    turn: 0,
+    mode: null,
+    numType: null,
+    stage: 'wait_join'
   };
+
   ctx.reply(`⚔️ Дуэль создан!\nПередай другу:\n/join_${code}`);
 });
 
@@ -71,78 +111,100 @@ bot.hears(/\/join_(\w+)/, ctx => {
     return ctx.reply('Дуэль недоступна');
 
   duel.players.push(ctx.chat.id);
+  duel.stage = 'choose_mode';
 
   duel.players.forEach(id =>
     bot.telegram.sendMessage(
       id,
-      `⚔️ Дуэль началась!\nХод игрока: ${duel.players[0]}`
+      '⚔️ Дуэль началась!\nВыберите режим:',
+      Markup.keyboard(['📝 Слова', '🔢 Цифры']).resize()
     )
   );
 });
 
-// ================= STATS =================
-bot.command('stats', ctx => {
-  const s = stats[ctx.chat.id];
-  if (!s) return ctx.reply('Нет статистики');
-  ctx.reply(`📊 Лучший результат: ${s.best}\n🎮 Игр: ${s.games}`);
-});
-
-// ================= MAIN HANDLER =================
+// =====================
+// TEXT HANDLER
+// =====================
 bot.on('text', async ctx => {
+  const text = ctx.message.text;
   const id = ctx.chat.id;
 
-  // DUEL MODE
-  for (const duel of Object.values(duels)) {
-    if (!duel.active || !duel.players.includes(id)) continue;
+  if (text.startsWith('/')) return;
 
-    if (duel.players[duel.turnIndex] !== id) {
+  // ----- DUEL -----
+  const duel = Object.values(duels).find(d => d.players.includes(id));
+  if (duel && duel.stage === 'playing') {
+    if (duel.players[duel.turn] !== id) {
       try { await ctx.deleteMessage(); } catch {}
       return;
     }
 
     try { await ctx.deleteMessage(); } catch {}
 
-    const value = normalize(ctx.message.text);
+    const value =
+      duel.mode === 'words'
+        ? normWord(text)
+        : text.trim();
 
-    if (duel.chain.length > 0 &&
-        duel.chain.slice(0, -1).includes(value)) {
-      duel.active = false;
-      return bot.telegram.sendMessage(id, '❌ Повтор — ты проиграл');
+    if (duel.chain.includes(value)) {
+      duel.players.forEach(pid =>
+        bot.telegram.sendMessage(pid, '❌ Повтор — ты проиграл')
+      );
+      return endDuel(duel);
     }
 
     duel.chain.push(value);
-    duel.turnIndex = (duel.turnIndex + 1) % 2;
+    duel.turn = (duel.turn + 1) % 2;
 
     duel.players.forEach(pid =>
       bot.telegram.sendMessage(
         pid,
-        `Цепочка: ${duel.chain.join(' ')}\nХод: ${duel.players[duel.turnIndex]}`
+        `Цепочка: ${duel.chain.join(' ')}\nХод игрока ${duel.turn + 1}`
       )
     );
     return;
   }
 
-  // SOLO MODE
+  // ----- SOLO -----
   const game = games[id];
   if (!game) return;
 
   try { await ctx.deleteMessage(); } catch {}
 
-  const input = ctx.message.text.split(/\s+/).map(normalize);
+  const parts =
+    game.mode === 'words'
+      ? text.split(/[ ,]+/).map(normWord)
+      : text.split(/[ ,]+/);
 
-  if (game.chain.length > 0) {
-    if (input.length !== game.chain.length + 1) return fail(ctx, id);
+  const expected = game.chain.join(' ');
+  const received = parts.slice(0, -1).join(' ');
 
-    for (let i = 0; i < game.chain.length; i++) {
-      if (input[i] !== game.chain[i]) return fail(ctx, id);
+  if (game.chain.length && received !== expected) {
+    game.lives--;
+    if (game.lives <= 0) {
+      ctx.reply(`💀 Игра окончена\nРанг: ${getRank(game.chain.length)}`);
+      delete games[id];
+    } else {
+      ctx.reply(`❌ Ошибка. ❤️ Осталось: ${game.lives}`);
     }
+    return;
   }
 
-  game.chain.push(input.at(-1));
+  const newItem = parts.at(-1);
+  if (game.used.has(newItem)) {
+    ctx.reply('❌ Повтор запрещён');
+    return;
+  }
+
+  game.chain.push(newItem);
+  game.used.add(newItem);
+
   await botTurn(ctx, game);
 });
 
-// ================= BOT TURN =================
+// =====================
+// BOT TURN
+// =====================
 async function botTurn(ctx, game) {
   await ctx.sendChatAction('typing');
   await sleep(900);
@@ -151,43 +213,33 @@ async function botTurn(ctx, game) {
     try { await ctx.deleteMessage(game.lastBotMsg); } catch {}
   }
 
-  const value = generateValue(game);
+  let value;
+  do {
+    value =
+      game.mode === 'words'
+        ? ['нож','рюкзак','аптечка','огниво','еда','вода','карта']
+            [Math.floor(Math.random()*7)]
+        : genNumber(game.numType);
+  } while (game.used.has(value));
+
   game.chain.push(value);
-  game.botUsed.add(value);
+  game.used.add(value);
 
   const msg = await ctx.reply(value);
   game.lastBotMsg = msg.message_id;
 
-  stats[ctx.chat.id].best = Math.max(
-    stats[ctx.chat.id].best,
-    game.chain.length
-  );
+  if (game.chain.length >= 10 && !game.bonusUnlocked) {
+    game.bonusUnlocked = true;
+    ctx.reply('🌀 БОНУС: попробуй повторить в ОБРАТНОМ порядке!');
+  }
 }
 
-// ================= GENERATOR =================
-function generateValue(game) {
-  let v;
-  do {
-    if (game.mode === 'words') {
-      const words = ['рюкзак','нож','еда','карта','аптечка','вода','огниво'];
-      v = words[Math.floor(Math.random() * words.length)];
-    } else {
-      if (game.numberType === 'normal')
-        v = String(Math.floor(Math.random() * 10));
-      if (game.numberType === 'double')
-        v = String(Math.floor(10 + Math.random() * 90));
-      if (game.numberType === 'triple')
-        v = String(Math.floor(100 + Math.random() * 900));
-    }
-  } while (game.botUsed.has(v));
-  return v;
+// =====================
+// END DUEL
+// =====================
+function endDuel(duel) {
+  for (const k in duels) if (duels[k] === duel) delete duels[k];
 }
 
-// ================= FAIL =================
-function fail(ctx, id) {
-  stats[id].games++;
-  ctx.reply('❌ Ошибка. Напиши /start чтобы начать заново');
-  delete games[id];
-}
-
+// =====================
 bot.launch();
